@@ -225,6 +225,8 @@ vercel --prod
 
 ### 10. Set Telegram Webhook
 
+After deploying, you must tell Telegram where to send updates:
+
 ```bash
 curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
   -H "Content-Type: application/json" \
@@ -234,11 +236,61 @@ curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
   }'
 ```
 
-Verify:
+**Response:** `{"ok":true,"result":true,"description":"Webhook was set"}`
+
+**Verify it's working:**
 
 ```bash
 curl "https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo"
 ```
+
+Expected output:
+```json
+{
+  "ok": true,
+  "result": {
+    "url": "https://your-project.vercel.app/api/webhook",
+    "has_custom_certificate": false,
+    "pending_update_count": 0,
+    "max_connections": 40
+  }
+}
+```
+
+#### Webhook Troubleshooting
+
+If the bot doesn't respond on Telegram after deploying:
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `last_error_message: "Wrong response from the webhook: 500"` | Function crashing on Vercel | Check `vercel logs` for the actual error |
+| `TypeError: req.headers.get is not a function` | Using Web Standard `Request` API on Vercel (which uses Node.js `IncomingMessage`) | Already fixed in this project — use `req.headers["name"]` instead |
+| `Bot not initialized!` | Missing `bot.init()` in webhook handler | Already fixed — `api/webhook.ts` calls `await bot.init()` |
+| `{"ok":false,"error_code":400,"description":"Bad Request: secret token contains unallowed characters"}` | `WEBHOOK_SECRET` has invalid chars (`=`, `/`, `+`) | Use only `a-z`, `A-Z`, `0-9`, `_`, `-` |
+| `pending_update_count` keeps growing | Webhook returning errors; Telegram is retrying | Fix the error, then run `deleteWebhook` and `setWebhook` again |
+
+**To reset the webhook (useful after URL changes or errors):**
+
+```bash
+# 1. Delete old webhook and clear queue
+curl "https://api.telegram.org/bot<BOT_TOKEN>/deleteWebhook?drop_pending_updates=true"
+
+# 2. Re-set with new URL
+curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://your-project.vercel.app/api/webhook",
+    "secret_token": "your-clean-secret"
+  }'
+```
+
+**Important:** After every `vercel --prod` deploy that changes the API functions, the env vars are rebuilt. If you added env vars after the last deploy, **redeploy first** (`vercel --prod`), then re-set the webhook.
+
+**Check Vercel logs for function errors:**
+```bash
+vercel logs https://your-project.vercel.app
+```
+Or visit: `https://vercel.com/shatilkhans-projects/yunus/logs`
 
 ## Database Management
 
@@ -322,37 +374,134 @@ Savings 2000 Monthly savings
 
 **How to find a Telegram ID:** Message [@userinfobot](https://t.me/userinfobot)
 
-## Scheduled Summaries
+## Admin Guide
 
-You can receive automatic summary reports at scheduled times via a free cron service.
+### First-Time Setup
+
+When you first deploy the bot, **no admin exists**. The first person to message `/start` becomes the admin automatically. You'll see:
+
+> "You have been set as the admin. Welcome!"
+
+### Adding a New User
+
+To allow someone else to use the bot, you need their **Telegram user ID**.
+
+**Step 1: Get their Telegram ID**
+- Ask them to message [@userinfobot](https://t.me/userinfobot) on Telegram
+- They'll receive their ID (e.g., `123456789`)
+
+**Step 2: Add them to the whitelist**
+
+Message your bot:
+```
+/admin add 123456789
+```
+
+**Response:**
+> "User 123456789 added to whitelist."
+
+**Step 3: They can now use the bot**
+- They message the bot `/start`
+- They get full access to all features
+
+### Removing a User
+
+```
+/admin remove 123456789
+```
+
+**Response:**
+> "User 123456789 removed from whitelist."
+
+### Listing All Users
+
+```
+/admin list
+```
+
+**Response:**
+```
+Allowed users:
+ID: 123456789 (added by 987654321)
+ID: 987654321 (added by 987654321)
+```
+
+### Security Notes
+
+- The admin (first user) is **automatically** whitelisted
+- **Non-whitelisted users** get "Access denied. This bot is private." when messaging `/start`
+- Admin commands (`/admin`) are **restricted** to the admin only
+- The admin ID is stored in the `settings` table, not in env vars (so it can't be leaked)
+- You can change admin by manually updating the `settings` table in Turso (advanced)
+
+## Summaries
+
+The bot provides **Daily, Weekly, and Monthly summaries** both on-demand and via scheduled reports.
 
 ### On-Demand Summaries
 
-Tap **Today**, **This Week**, or **This Month** from the `/start` menu to get instant summaries.
+Tap these buttons from the `/start` menu for instant reports:
 
-### Automated Summaries via Cron
+| Button | Period | Data Range |
+|--------|--------|-----------|
+| **Today** | Daily | From midnight today until now |
+| **This Week** | Weekly | From the most recent Thursday until now |
+| **This Month** | Monthly | From the 1st of this month until now |
+
+**Summary format:**
+```
+📊 [Period] Summary
+━━━━━━━━━━━━━━
+💸 Bazar: 500.00
+💸 Grocery: 1200.00
+💰 Savings: 2000.00
+
+💸 Total Expense: 1700.00
+💰 Total Savings: 2000.00
+📈 Net: +300.00
+```
+
+- **💸** = Expense categories
+- **💰** = Savings categories
+- Categories with no entries are hidden
+- Shows "No entries for this period" if empty
+
+### Scheduled Summaries
+
+Scheduled summaries use **the previous period** (not current):
+
+| Schedule | Period | Data Range |
+|----------|--------|-----------|
+| Daily at 12:30 AM | Yesterday | Full previous day (midnight to midnight) |
+| Thursday 12:30 AM | Last Week | Previous Thursday to last Thursday |
+| Last day of month | Last Month | Full previous month |
+
+**Bangladesh Time (UTC+6) conversion:**
+- 12:30 AM Bangladesh = 18:30 UTC (previous day)
+
+### Setup Automated Summaries via Cron
 
 Since Vercel's free plan doesn't support cron jobs, use [cron-job.org](https://cron-job.org) (free):
 
 1. Sign up at [cron-job.org](https://cron-job.org)
-2. Create 3 cron jobs with these settings:
+2. Create 3 cron jobs:
 
-**Daily Summary (12:30 AM Bangladesh Time)**
+**Daily Summary**
 - URL: `https://your-project.vercel.app/api/summary?type=daily&mode=scheduled&user_id=YOUR_TELEGRAM_ID`
-- Schedule: Daily at 18:30 UTC (12:30 AM +6)
+- Schedule: Daily at 18:30 UTC
 
-**Weekly Summary (Thursday 12:30 AM Bangladesh Time)**
+**Weekly Summary**
 - URL: `https://your-project.vercel.app/api/summary?type=weekly&mode=scheduled&user_id=YOUR_TELEGRAM_ID`
 - Schedule: Weekly on Wednesday at 18:30 UTC
 
-**Monthly Summary (Last day 12:30 AM Bangladesh Time)**
+**Monthly Summary**
 - URL: `https://your-project.vercel.app/api/summary?type=monthly&mode=scheduled&user_id=YOUR_TELEGRAM_ID`
 - Schedule: Monthly on the last day at 18:30 UTC
 
 3. Set the header `X-Cron-Secret` to match your `CRON_SECRET` env var
-4. The response will include the summary text, but you'll need to send it to Telegram yourself (or read it from the API response)
+4. The API returns JSON with the summary text in the `data.text` field
 
-**Note:** For the scheduled summary to be sent TO you on Telegram, you can set up a simple script that calls the API and then sends the result via Telegram, or just check the cron logs on cron-job.org.
+**Note:** To receive summaries directly in Telegram, you would need a separate script that calls this API and then uses the Telegram Bot API `sendMessage` to deliver it. For now, check the cron logs or call the API manually.
 
 ## Environment Variables Reference
 
