@@ -324,7 +324,7 @@ async function parseBulkEntries(ctx: any, userId: number, text: string) {
   }
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+    const line = lines[i]!.trim();
     if (!line) continue;
 
     // Parse: Category Amount [Note]
@@ -334,7 +334,7 @@ async function parseBulkEntries(ctx: any, userId: number, text: string) {
       continue;
     }
 
-    const categoryName = parts[0];
+    const categoryName = parts[0]!;
     const amountStr = parts[1];
     const note = parts.slice(2).join(" ") || null;
 

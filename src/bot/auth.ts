@@ -18,7 +18,7 @@ export function verifyInitData(initData: string): { id: number; [key: string]: a
 
     // Sort params alphabetically and join
     const entries: [string, string][] = [];
-    params.forEach((value, key) => entries.push([key, value]));
+    params.forEach((value: string, key: string) => entries.push([key, value]));
     
     const dataCheckString = entries
       .sort((a, b) => a[0].localeCompare(b[0]))
