@@ -49,8 +49,9 @@ bot.use(async (ctx, next) => {
 bot.command("start", async (ctx) => {
   const keyboard = new InlineKeyboard()
     .text("Add Entry", "wizard_start")
-    .text("Open Dashboard", "open_dashboard")
+    .text("Add Multiple", "bulk_start")
     .row()
+    .text("Open Dashboard", "open_dashboard")
     .text("View Summary", "view_summary");
 
   await ctx.reply(
@@ -178,9 +179,41 @@ bot.callbackQuery("view_summary", async (ctx) => {
   await ctx.answerCallbackQuery();
 });
 
-// Handle wizard steps via text messages
+// Bulk entry callback
+bot.callbackQuery("bulk_start", async (ctx) => {
+  const userId = ctx.from.id;
+  await setSession(`bulk:${userId}`, { step: "awaiting_input" });
+
+  const categories = await db.execute("SELECT name FROM categories ORDER BY id");
+  const categoryList = (categories.rows as Array<{ name: string }>)
+    .map((c) => c.name)
+    .join(", ");
+
+  await ctx.editMessageText(
+    `Add multiple entries at once.\n\n` +
+    `Send one line per entry in this format:\n` +
+    `Category Amount [Note]\n\n` +
+    `Examples:\n` +
+    `Bazar 500 Weekly market\n` +
+    `Grocery 1200\n` +
+    `Savings 2000 Monthly savings\n\n` +
+    `Categories: ${categoryList}\n\n` +
+    `Tip: You can skip any category by leaving it out or using 0.`
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Handle wizard and bulk entry steps via text messages
 bot.on("message:text", async (ctx) => {
   const userId = ctx.from.id;
+
+  // Check bulk mode first
+  const bulkSession = await getSession(`bulk:${userId}`);
+  if (bulkSession && bulkSession.step === "awaiting_input") {
+    await parseBulkEntries(ctx, userId, ctx.message.text);
+    return;
+  }
+
   const session = await getSession(`wizard:${userId}`);
   if (!session) return; // Not in wizard mode
 
@@ -274,5 +307,110 @@ bot.callbackQuery("cancel_entry", async (ctx) => {
   const userId = ctx.from.id;
   await deleteSession(`wizard:${userId}`);
   await ctx.editMessageText("Entry cancelled.");
+  await ctx.answerCallbackQuery();
+});
+
+// Bulk entry parser
+async function parseBulkEntries(ctx: any, userId: number, text: string) {
+  const lines = text.trim().split("\n");
+  const entries: Array<{ categoryId: number; amount: number; note: string | null }> = [];
+  const errors: string[] = [];
+
+  // Fetch all categories for lookup
+  const catsResult = await db.execute("SELECT id, name FROM categories");
+  const categories = new Map<string, number>();
+  for (const row of catsResult.rows as Array<{ id: number; name: string }>) {
+    categories.set(row.name.toLowerCase(), row.id);
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    // Parse: Category Amount [Note]
+    const parts = line.split(/\s+/);
+    if (parts.length < 2) {
+      errors.push(`Line ${i + 1}: "${line}" — missing amount`);
+      continue;
+    }
+
+    const categoryName = parts[0];
+    const amountStr = parts[1];
+    const note = parts.slice(2).join(" ") || null;
+
+    const categoryId = categories.get(categoryName.toLowerCase());
+    if (!categoryId) {
+      errors.push(`Line ${i + 1}: "${categoryName}" — unknown category`);
+      continue;
+    }
+
+    const amount = Number(amountStr);
+    if (isNaN(amount) || amount <= 0) {
+      // Skip entries with 0 or invalid amount (user chose to skip this category)
+      continue;
+    }
+
+    entries.push({ categoryId, amount, note });
+  }
+
+  if (errors.length > 0) {
+    await ctx.reply(
+      `Found some errors:\n${errors.join("\n")}\n\n` +
+      `Please fix and send again.`
+    );
+    return;
+  }
+
+  if (entries.length === 0) {
+    await ctx.reply("No valid entries found. Please check your format and try again.");
+    await deleteSession(`bulk:${userId}`);
+    return;
+  }
+
+  // Store entries in session for confirmation
+  await setSession(`bulk:${userId}`, { step: "confirm", entries });
+
+  // Build summary
+  const total = entries.reduce((sum, e) => sum + e.amount, 0);
+  const summaryLines = entries.map(
+    (e) => `${e.note ? "📝" : "💰"} ${e.amount} Taka${e.note ? ` — ${e.note}` : ""}`
+  );
+
+  const keyboard = new InlineKeyboard()
+    .text("Confirm All", "bulk_confirm")
+    .text("Cancel", "bulk_cancel");
+
+  await ctx.reply(
+    `${entries.length} entries ready to save:\n\n` +
+    summaryLines.join("\n") +
+    `\n\nTotal: ${total.toFixed(2)} Taka`,
+    { reply_markup: keyboard }
+  );
+}
+
+bot.callbackQuery("bulk_confirm", async (ctx) => {
+  const userId = ctx.from.id;
+  const session = await getSession(`bulk:${userId}`);
+  if (!session || session.step !== "confirm") {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+
+  for (const entry of session.entries) {
+    await db.execute(
+      "INSERT INTO entries (user_id, category_id, amount, note) VALUES (?, ?, ?, ?)",
+      [userId, entry.categoryId, entry.amount, entry.note]
+    );
+  }
+
+  await deleteSession(`bulk:${userId}`);
+  await ctx.editMessageText(`${session.entries.length} entries saved successfully!`);
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("bulk_cancel", async (ctx) => {
+  const userId = ctx.from.id;
+  await deleteSession(`bulk:${userId}`);
+  await ctx.editMessageText("Bulk entry cancelled.");
   await ctx.answerCallbackQuery();
 });
