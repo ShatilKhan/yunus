@@ -1,4 +1,4 @@
--- Categories (13 fixed options)
+-- Categories (14 fixed options)
 CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
@@ -55,4 +55,5 @@ INSERT OR IGNORE INTO categories (id, name, type) VALUES
   (10, 'Donation', 'expense'),
   (11, 'Others', 'expense'),
   (12, 'Home', 'expense'),
-  (13, 'Savings', 'saving');
+  (13, 'Savings', 'saving'),
+  (14, 'Shopping', 'expense');
