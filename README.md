@@ -11,6 +11,7 @@ A personal finance management Telegram bot with a Mini App dashboard. Track your
 - **Time Filtering** — View data by Daily, Weekly, or Monthly ranges
 - **Admin Whitelist** — Only authorized users can access the bot; admin controls who gets access
 - **Private by Design** — First user to message `/start` becomes admin; everyone else is blocked until whitelisted
+- **Shared Data** — All whitelisted users see the same entries and summaries (perfect for managing shared household finances)
 - **Daily, Weekly & Monthly Summaries** — Generate summary reports on-demand from the bot, or schedule them to run automatically
 
 ## Architecture
@@ -433,6 +434,14 @@ ID: 987654321 (added by 987654321)
 - Admin commands (`/admin`) are **restricted** to the admin only
 - The admin ID is stored in the `settings` table, not in env vars (so it can't be leaked)
 - You can change admin by manually updating the `settings` table in Turso (advanced)
+
+### Shared Data
+
+**All whitelisted users share the same data.** When any user adds an entry, it appears in everyone's dashboard and summaries. This is designed for **managing shared finances** (e.g., a couple tracking household expenses together).
+
+- **Read access:** All whitelisted users see all entries
+- **Write access:** All whitelisted users can add entries (tracked by `user_id` for audit)
+- **No isolation:** There is no per-user data separation
 
 ## Summaries
 
