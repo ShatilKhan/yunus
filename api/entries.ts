@@ -8,44 +8,44 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, X-Telegram-Init-Data",
 };
 
-async function getUserFromRequest(req: Request): Promise<{ id: number } | null> {
-  const initData = req.headers.get("X-Telegram-Init-Data");
+function setCors(res: any) {
+  for (const [key, value] of Object.entries(corsHeaders)) {
+    res.setHeader(key, value);
+  }
+}
+
+async function getUserFromRequest(req: any): Promise<{ id: number } | null> {
+  const initData = req.headers["x-telegram-init-data"];
   if (!initData) return null;
 
   const user = verifyInitData(initData);
   if (!user) return null;
 
-  // Check whitelist
   if (!(await isAllowed(user.id))) return null;
 
   return user;
 }
 
-export default async function handler(req: Request): Promise<Response> {
+export default async function handler(req: any, res: any): Promise<void> {
+  setCors(res);
+
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return res.status(200).end();
   }
 
   if (req.method !== "GET" && req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
   const user = await getUserFromRequest(req);
   if (!user) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
   try {
     if (req.method === "GET") {
-      const url = new URL(req.url);
-      const category = url.searchParams.get("category");
-      const days = url.searchParams.get("days");
+      const category = req.query?.category;
+      const days = req.query?.days;
 
       let query = `
         SELECT e.id, e.amount, e.note, e.created_at,
@@ -69,21 +69,14 @@ export default async function handler(req: Request): Promise<Response> {
       query += " ORDER BY e.created_at DESC";
 
       const result = await db.execute(query, params);
-
-      return new Response(JSON.stringify({ success: true, data: result.rows }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return res.status(200).json({ success: true, data: result.rows });
     }
 
     if (req.method === "POST") {
-      const body = await req.json();
-      const { categoryId, amount, note } = body;
+      const { categoryId, amount, note } = req.body || {};
 
       if (!categoryId || !amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-        return new Response(
-          JSON.stringify({ error: "Invalid category or amount" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return res.status(400).json({ error: "Invalid category or amount" });
       }
 
       await db.execute(
@@ -91,19 +84,12 @@ export default async function handler(req: Request): Promise<Response> {
         [user.id, Number(categoryId), Number(amount), note || null]
       );
 
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return res.status(200).json({ success: true });
     }
   } catch (error: any) {
-    return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    console.error("Entries API error:", error);
+    return res.status(500).json({ error: error.message });
   }
 
-  return new Response(JSON.stringify({ error: "Not found" }), {
-    status: 404,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
+  return res.status(404).json({ error: "Not found" });
 }

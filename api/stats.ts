@@ -8,37 +8,35 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, X-Telegram-Init-Data",
 };
 
-export default async function handler(req: Request): Promise<Response> {
+function setCors(res: any) {
+  for (const [key, value] of Object.entries(corsHeaders)) {
+    res.setHeader(key, value);
+  }
+}
+
+export default async function handler(req: any, res: any): Promise<void> {
+  setCors(res);
+
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return res.status(200).end();
   }
 
   if (req.method !== "GET") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const initData = req.headers.get("X-Telegram-Init-Data");
+  const initData = req.headers["x-telegram-init-data"];
   if (!initData) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
   const user = verifyInitData(initData);
   if (!user || !(await isAllowed(user.id))) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
   try {
-    const url = new URL(req.url);
-    const days = url.searchParams.get("days") || "30";
+    const days = req.query?.days || "30";
 
     const result = await db.execute(
       `SELECT
@@ -67,20 +65,15 @@ export default async function handler(req: Request): Promise<Response> {
       [user.id, Number(days)]
     );
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        data: {
-          breakdown: result.rows,
-          totals: totalsResult.rows[0],
-        },
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return res.status(200).json({
+      success: true,
+      data: {
+        breakdown: result.rows,
+        totals: totalsResult.rows[0],
+      },
+    });
   } catch (error: any) {
-    return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    console.error("Stats API error:", error);
+    return res.status(500).json({ error: error.message });
   }
 }
