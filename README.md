@@ -11,6 +11,7 @@ A personal finance management Telegram bot with a Mini App dashboard. Track your
 - **Time Filtering** — View data by Daily, Weekly, or Monthly ranges
 - **Admin Whitelist** — Only authorized users can access the bot; admin controls who gets access
 - **Private by Design** — First user to message `/start` becomes admin; everyone else is blocked until whitelisted
+- **Daily, Weekly & Monthly Summaries** — Generate summary reports on-demand from the bot, or schedule them to run automatically
 
 ## Architecture
 
@@ -165,6 +166,7 @@ WEBHOOK_SECRET=any-random-string-at-least-32-chars
 TURSO_DATABASE_URL=libsql://your-db.turso.io
 TURSO_AUTH_TOKEN=your-turso-token-here
 DASHBOARD_URL=https://your-project.vercel.app
+CRON_SECRET=another-random-string-for-cron-jobs
 ```
 
 **Note:** `DASHBOARD_URL` is a placeholder for now. You'll update it after first deploy.
@@ -291,8 +293,10 @@ turso db shell your-db-name < backup.sql
 |--------|--------|
 | **Add Entry** | Start single-entry wizard |
 | **Add Multiple** | Start bulk entry mode |
-| **Open Dashboard** | Send dashboard link |
-| **View Summary** | Show last 30 days totals |
+| **Open Dashboard** | Open Mini App dashboard |
+| **Today** | Show today's summary |
+| **This Week** | Show this week's summary |
+| **This Month** | Show this month's summary |
 
 ### Bulk Entry Format
 
@@ -318,6 +322,38 @@ Savings 2000 Monthly savings
 
 **How to find a Telegram ID:** Message [@userinfobot](https://t.me/userinfobot)
 
+## Scheduled Summaries
+
+You can receive automatic summary reports at scheduled times via a free cron service.
+
+### On-Demand Summaries
+
+Tap **Today**, **This Week**, or **This Month** from the `/start` menu to get instant summaries.
+
+### Automated Summaries via Cron
+
+Since Vercel's free plan doesn't support cron jobs, use [cron-job.org](https://cron-job.org) (free):
+
+1. Sign up at [cron-job.org](https://cron-job.org)
+2. Create 3 cron jobs with these settings:
+
+**Daily Summary (12:30 AM Bangladesh Time)**
+- URL: `https://your-project.vercel.app/api/summary?type=daily&mode=scheduled&user_id=YOUR_TELEGRAM_ID`
+- Schedule: Daily at 18:30 UTC (12:30 AM +6)
+
+**Weekly Summary (Thursday 12:30 AM Bangladesh Time)**
+- URL: `https://your-project.vercel.app/api/summary?type=weekly&mode=scheduled&user_id=YOUR_TELEGRAM_ID`
+- Schedule: Weekly on Wednesday at 18:30 UTC
+
+**Monthly Summary (Last day 12:30 AM Bangladesh Time)**
+- URL: `https://your-project.vercel.app/api/summary?type=monthly&mode=scheduled&user_id=YOUR_TELEGRAM_ID`
+- Schedule: Monthly on the last day at 18:30 UTC
+
+3. Set the header `X-Cron-Secret` to match your `CRON_SECRET` env var
+4. The response will include the summary text, but you'll need to send it to Telegram yourself (or read it from the API response)
+
+**Note:** For the scheduled summary to be sent TO you on Telegram, you can set up a simple script that calls the API and then sends the result via Telegram, or just check the cron logs on cron-job.org.
+
 ## Environment Variables Reference
 
 | Variable | Required | Description |
@@ -327,6 +363,7 @@ Savings 2000 Monthly savings
 | `TURSO_DATABASE_URL` | Yes | Turso database connection URL |
 | `TURSO_AUTH_TOKEN` | Yes | Turso database auth token |
 | `DASHBOARD_URL` | Yes | Your deployed Vercel URL |
+| `CRON_SECRET` | No | Secret for external cron job authentication |
 
 ## Security
 
