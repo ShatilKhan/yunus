@@ -16,6 +16,7 @@ export default async function handler(req: any, res: any): Promise<void> {
 
   try {
     const update = req.body;
+    await bot.init();
     await bot.handleUpdate(update);
     return res.status(200).send("OK");
   } catch (error) {
