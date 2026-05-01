@@ -58,7 +58,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   }
 
   try {
-    const summary = await generateSummary(userId, type, mode);
+    const summary = await generateSummary(type, mode);
     return res.status(200).json({
       success: true,
       data: {

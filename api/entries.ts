@@ -52,9 +52,9 @@ export default async function handler(req: any, res: any): Promise<void> {
                c.id as category_id, c.name as category_name, c.type as category_type
         FROM entries e
         JOIN categories c ON e.category_id = c.id
-        WHERE e.user_id = ?
+        WHERE 1=1
       `;
-      const params: any[] = [user.id];
+      const params: any[] = [];
 
       if (category) {
         query += " AND e.category_id = ?";

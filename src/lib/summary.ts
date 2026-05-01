@@ -18,13 +18,11 @@ interface SummaryResult {
 }
 
 /**
- * Generate a summary for a user
- * @param userId - Telegram user ID
+ * Generate a summary for all entries (shared data across all users)
  * @param period - daily | weekly | monthly
  * @param mode - scheduled (previous period) | ondemand (current period up to now)
  */
 export async function generateSummary(
-  userId: number,
   period: SummaryPeriod,
   mode: SummaryMode = "ondemand"
 ): Promise<SummaryResult> {
@@ -99,14 +97,13 @@ export async function generateSummary(
       SUM(e.amount) as amount
     FROM entries e
     JOIN categories c ON e.category_id = c.id
-    WHERE e.user_id = ?
-    AND e.created_at >= ${startDate}
+    WHERE e.created_at >= ${startDate}
     AND e.created_at < ${endDate}
     GROUP BY c.id
     ORDER BY c.type DESC, amount DESC
   `;
 
-  const result = await db.execute(query, [userId]);
+  const result = await db.execute(query);
   const rows = result.rows as Array<{ category: string; type: string; amount: number }>;
 
   const totalExpense = rows

@@ -46,11 +46,10 @@ export default async function handler(req: any, res: any): Promise<void> {
         COUNT(*) as count
       FROM entries e
       JOIN categories c ON e.category_id = c.id
-      WHERE e.user_id = ?
-      AND e.created_at >= datetime('now', '-' || ? || ' days')
+      WHERE e.created_at >= datetime('now', '-' || ? || ' days')
       GROUP BY c.id
       ORDER BY total DESC`,
-      [user.id, Number(days)]
+      [Number(days)]
     );
 
     const totalsResult = await db.execute(
@@ -60,9 +59,8 @@ export default async function handler(req: any, res: any): Promise<void> {
         COUNT(*) as transaction_count
       FROM entries e
       JOIN categories c ON e.category_id = c.id
-      WHERE e.user_id = ?
-      AND e.created_at >= datetime('now', '-' || ? || ' days')`,
-      [user.id, Number(days)]
+      WHERE e.created_at >= datetime('now', '-' || ? || ' days')`,
+      [Number(days)]
     );
 
     return res.status(200).json({

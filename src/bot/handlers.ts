@@ -157,22 +157,19 @@ bot.callbackQuery("open_dashboard", async (ctx) => {
 });
 
 bot.callbackQuery("summary_daily", async (ctx) => {
-  const userId = ctx.from.id;
-  const summary = await generateSummary(userId, "daily", "ondemand");
+  const summary = await generateSummary("daily", "ondemand");
   await ctx.editMessageText(formatSummary(summary));
   await ctx.answerCallbackQuery();
 });
 
 bot.callbackQuery("summary_weekly", async (ctx) => {
-  const userId = ctx.from.id;
-  const summary = await generateSummary(userId, "weekly", "ondemand");
+  const summary = await generateSummary("weekly", "ondemand");
   await ctx.editMessageText(formatSummary(summary));
   await ctx.answerCallbackQuery();
 });
 
 bot.callbackQuery("summary_monthly", async (ctx) => {
-  const userId = ctx.from.id;
-  const summary = await generateSummary(userId, "monthly", "ondemand");
+  const summary = await generateSummary("monthly", "ondemand");
   await ctx.editMessageText(formatSummary(summary));
   await ctx.answerCallbackQuery();
 });
