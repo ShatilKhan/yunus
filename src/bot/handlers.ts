@@ -142,9 +142,9 @@ bot.callbackQuery("open_dashboard", async (ctx) => {
   if (dashboardUrl) {
     await ctx.answerCallbackQuery({ text: "Opening dashboard..." });
     await ctx.reply(
-      `Open your dashboard:\n${dashboardUrl}`,
+      "Tap below to open your dashboard inside Telegram:",
       {
-        reply_markup: new InlineKeyboard().url("Open Dashboard", dashboardUrl),
+        reply_markup: new InlineKeyboard().webApp("Open Dashboard", dashboardUrl),
       }
     );
   } else {
