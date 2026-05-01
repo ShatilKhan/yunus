@@ -10,6 +10,7 @@ import {
   listAllowedUsers,
   getAdminId,
 } from "../db/client";
+import { generateSummary, formatSummary } from "../lib/summary";
 
 // Middleware: check if user is allowed
 bot.use(async (ctx, next) => {
@@ -52,7 +53,10 @@ bot.command("start", async (ctx) => {
     .text("Add Multiple", "bulk_start")
     .row()
     .text("Open Dashboard", "open_dashboard")
-    .text("View Summary", "view_summary");
+    .row()
+    .text("Today", "summary_daily")
+    .text("This Week", "summary_weekly")
+    .text("This Month", "summary_monthly");
 
   await ctx.reply(
     "Welcome to Yunus Finance Tracker!\n\n" +
@@ -152,30 +156,24 @@ bot.callbackQuery("open_dashboard", async (ctx) => {
   }
 });
 
-bot.callbackQuery("view_summary", async (ctx) => {
+bot.callbackQuery("summary_daily", async (ctx) => {
   const userId = ctx.from.id;
-  const result = await db.execute(
-    `SELECT 
-      c.type,
-      SUM(e.amount) as total
-    FROM entries e
-    JOIN categories c ON e.category_id = c.id
-    WHERE e.user_id = ?
-    AND e.created_at >= datetime('now', '-30 days')
-    GROUP BY c.type`,
-    [userId]
-  );
+  const summary = await generateSummary(userId, "daily", "ondemand");
+  await ctx.editMessageText(formatSummary(summary));
+  await ctx.answerCallbackQuery();
+});
 
-  const rows = result.rows as Array<{ type: string; total: number }>;
-  const expense = rows.find((r) => r.type === "expense")?.total || 0;
-  const saving = rows.find((r) => r.type === "saving")?.total || 0;
+bot.callbackQuery("summary_weekly", async (ctx) => {
+  const userId = ctx.from.id;
+  const summary = await generateSummary(userId, "weekly", "ondemand");
+  await ctx.editMessageText(formatSummary(summary));
+  await ctx.answerCallbackQuery();
+});
 
-  await ctx.editMessageText(
-    `Last 30 days summary:\n\n` +
-    `Total Expenses: ${expense.toFixed(2)} Taka\n` +
-    `Total Savings: ${saving.toFixed(2)} Taka\n` +
-    `Net: ${(saving - expense).toFixed(2)} Taka`
-  );
+bot.callbackQuery("summary_monthly", async (ctx) => {
+  const userId = ctx.from.id;
+  const summary = await generateSummary(userId, "monthly", "ondemand");
+  await ctx.editMessageText(formatSummary(summary));
   await ctx.answerCallbackQuery();
 });
 
