@@ -11,6 +11,7 @@ import {
   getAdminId,
 } from "../db/client";
 import { generateSummary, formatSummary } from "../lib/summary";
+import { parseUserDate, todayIso, daysAgoIso, formatDateLabel } from "../lib/date";
 
 // Middleware: check if user is allowed
 bot.use(async (ctx, next) => {
@@ -52,6 +53,7 @@ bot.command("start", async (ctx) => {
     .text("Add Entry", "wizard_start")
     .text("Add Multiple", "bulk_start")
     .row()
+    .text("Edit / Backfill", "edit_start")
     .text("Open Dashboard", "open_dashboard")
     .row()
     .text("Today", "summary_daily")
@@ -133,10 +135,19 @@ bot.callbackQuery(/^cat_(\d+)$/, async (ctx) => {
   const userId = ctx.from.id;
   const categoryId = Number(ctx.match[1]);
 
-  await setSession(`wizard:${userId}`, { step: "amount", categoryId });
+  const prev = await getSession(`wizard:${userId}`);
+  await setSession(`wizard:${userId}`, {
+    step: "amount",
+    categoryId,
+    ...(prev?.targetDate ? { targetDate: prev.targetDate } : {}),
+  });
+  const dateNote = prev?.targetDate
+    ? `\n\nDate: ${formatDateLabel(prev.targetDate)}`
+    : "";
   await ctx.editMessageText(
     "Enter the amount in Taka:\n\n" +
-    "(Just send a number, e.g. 500)"
+    "(Just send a number, e.g. 500)" +
+    dateNote
   );
   await ctx.answerCallbackQuery();
 });
@@ -171,6 +182,149 @@ bot.callbackQuery("summary_weekly", async (ctx) => {
 bot.callbackQuery("summary_monthly", async (ctx) => {
   const summary = await generateSummary("monthly", "ondemand");
   await ctx.editMessageText(formatSummary(summary));
+  await ctx.answerCallbackQuery();
+});
+
+// Edit / Backfill flow
+bot.callbackQuery("edit_start", async (ctx) => {
+  const userId = ctx.from.id;
+  await deleteSession(`wizard:${userId}`);
+  await setSession(`edit:${userId}`, { step: "pick_date" });
+
+  const keyboard = new InlineKeyboard()
+    .text("Today", "edit_date_today")
+    .text("Yesterday", "edit_date_yesterday")
+    .row()
+    .text("Pick date", "edit_date_pick");
+
+  await ctx.editMessageText(
+    "Pick a day to edit or backfill:",
+    { reply_markup: keyboard }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("edit_date_today", async (ctx) => {
+  await showDayEntries(ctx, ctx.from.id, todayIso());
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("edit_date_yesterday", async (ctx) => {
+  await showDayEntries(ctx, ctx.from.id, daysAgoIso(1));
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("edit_date_pick", async (ctx) => {
+  const userId = ctx.from.id;
+  await setSession(`edit:${userId}`, { step: "awaiting_date" });
+  await ctx.editMessageText(
+    "Send the date as YYYY-MM-DD (e.g. 2026-05-04) or MM-DD (e.g. 05-04 — current year is assumed)."
+  );
+  await ctx.answerCallbackQuery();
+});
+
+async function showDayEntries(
+  ctx: any,
+  userId: number,
+  targetDate: string,
+  forceNewMessage = false
+) {
+  await setSession(`edit:${userId}`, { step: "viewing_day", targetDate });
+
+  const result = await db.execute(
+    `SELECT e.id, e.amount, c.name AS category_name
+     FROM entries e
+     JOIN categories c ON c.id = e.category_id
+     WHERE e.created_at >= datetime(?, 'start of day')
+       AND e.created_at <  datetime(?, 'start of day', '+1 day')
+     ORDER BY e.created_at ASC`,
+    [targetDate, targetDate]
+  );
+
+  const rows = result.rows as Array<{
+    id: number;
+    amount: number;
+    category_name: string;
+  }>;
+
+  const keyboard = new InlineKeyboard();
+  for (const row of rows) {
+    keyboard
+      .text(
+        `#${row.id}  ${row.category_name}  ৳${row.amount}`,
+        `edit_entry_${row.id}`
+      )
+      .row();
+  }
+  keyboard.text("+ Add for this date", "edit_add").row();
+  keyboard.text("Back", "edit_start");
+
+  const header =
+    rows.length === 0
+      ? `No entries for ${formatDateLabel(targetDate)}.`
+      : `Entries for ${formatDateLabel(targetDate)}:`;
+
+  const body = `${header}\n\nTap an entry to edit its amount, or add a new one.`;
+  if (forceNewMessage) {
+    await ctx.reply(body, { reply_markup: keyboard });
+  } else {
+    await ctx.editMessageText(body, { reply_markup: keyboard });
+  }
+}
+
+bot.callbackQuery(/^edit_entry_(\d+)$/, async (ctx) => {
+  const userId = ctx.from.id;
+  const entryId = Number(ctx.match[1]);
+
+  const result = await db.execute(
+    "SELECT id, amount FROM entries WHERE id = ?",
+    [entryId]
+  );
+  if (result.rows.length === 0) {
+    await ctx.answerCallbackQuery({ text: "Entry not found." });
+    return;
+  }
+  const current = result.rows[0] as { id: number; amount: number };
+
+  const session = (await getSession(`edit:${userId}`)) || {};
+  await setSession(`edit:${userId}`, {
+    step: "awaiting_amount",
+    targetDate: session.targetDate,
+    editEntryId: entryId,
+  });
+
+  await ctx.editMessageText(
+    `Editing entry #${entryId} (current amount: ${current.amount} Taka).\n\n` +
+    `Send the new amount as a positive number.`
+  );
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("edit_add", async (ctx) => {
+  const userId = ctx.from.id;
+  const editSession = await getSession(`edit:${userId}`);
+  if (!editSession?.targetDate) {
+    await ctx.answerCallbackQuery({ text: "Pick a date first." });
+    return;
+  }
+
+  await deleteSession(`edit:${userId}`);
+  await setSession(`wizard:${userId}`, {
+    step: "category",
+    targetDate: editSession.targetDate,
+  });
+
+  const categories = await db.execute("SELECT id, name FROM categories ORDER BY id");
+  const keyboard = new InlineKeyboard();
+  (categories.rows as Array<{ id: number; name: string }>).forEach((cat, i) => {
+    if (i % 2 === 0 && i > 0) keyboard.row();
+    keyboard.text(cat.name, `cat_${cat.id}`);
+  });
+
+  await ctx.editMessageText(
+    `Adding entry for ${formatDateLabel(editSession.targetDate)}.\n\nSelect a category:`,
+    { reply_markup: keyboard }
+  );
   await ctx.answerCallbackQuery();
 });
 
@@ -209,6 +363,38 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
+  // Edit / backfill flows
+  const editSession = await getSession(`edit:${userId}`);
+  if (editSession?.step === "awaiting_date") {
+    const iso = parseUserDate(ctx.message.text);
+    if (!iso) {
+      await ctx.reply(
+        "Couldn't parse that date. Try YYYY-MM-DD (2026-05-04), MM-DD (05-04), or 'today' / 'yesterday'."
+      );
+      return;
+    }
+    await showDayEntries(ctx, userId, iso, true);
+    return;
+  }
+  if (editSession?.step === "awaiting_amount") {
+    const amount = Number(ctx.message.text);
+    if (isNaN(amount) || amount <= 0) {
+      await ctx.reply("Please enter a valid positive number.");
+      return;
+    }
+    await db.execute(
+      "UPDATE entries SET amount = ? WHERE id = ? AND user_id = ?",
+      [amount, editSession.editEntryId, userId]
+    );
+    const targetDate = editSession.targetDate;
+    await deleteSession(`edit:${userId}`);
+    await ctx.reply(`Entry #${editSession.editEntryId} updated to ${amount} Taka.`);
+    if (targetDate) {
+      await showDayEntries(ctx, userId, targetDate, true);
+    }
+    return;
+  }
+
   const session = await getSession(`wizard:${userId}`);
   if (!session) return; // Not in wizard mode
 
@@ -224,6 +410,7 @@ bot.on("message:text", async (ctx) => {
       step: "note",
       categoryId: session.categoryId,
       amount,
+      ...(session.targetDate ? { targetDate: session.targetDate } : {}),
     });
 
     const keyboard = new InlineKeyboard().text("Skip", "skip_note");
@@ -234,6 +421,7 @@ bot.on("message:text", async (ctx) => {
       categoryId: session.categoryId,
       amount: session.amount,
       note: text,
+      ...(session.targetDate ? { targetDate: session.targetDate } : {}),
     });
     await showConfirmation(ctx, userId);
   }
@@ -252,6 +440,7 @@ bot.callbackQuery("skip_note", async (ctx) => {
     categoryId: session.categoryId,
     amount: session.amount,
     note: null,
+    ...(session.targetDate ? { targetDate: session.targetDate } : {}),
   });
   await showConfirmation(ctx, userId);
   await ctx.answerCallbackQuery();
@@ -266,6 +455,9 @@ async function showConfirmation(ctx: any, userId: number) {
   const categoryName = (catResult.rows[0] as { name: string })?.name || "Unknown";
 
   const noteText = session.note ? `\nNote: ${session.note}` : "";
+  const dateText = session.targetDate
+    ? `\nDate: ${formatDateLabel(session.targetDate)}`
+    : "";
 
   const keyboard = new InlineKeyboard()
     .text("Confirm", "confirm_entry")
@@ -275,7 +467,8 @@ async function showConfirmation(ctx: any, userId: number) {
     `Please confirm:\n\n` +
     `Category: ${categoryName}\n` +
     `Amount: ${session.amount} Taka` +
-    noteText,
+    noteText +
+    dateText,
     { reply_markup: keyboard }
   );
 }
@@ -288,13 +481,21 @@ bot.callbackQuery("confirm_entry", async (ctx) => {
     return;
   }
 
-  await db.execute(
-    "INSERT INTO entries (user_id, category_id, amount, note) VALUES (?, ?, ?, ?)",
-    [userId, session.categoryId, session.amount, session.note]
-  );
+  if (session.targetDate) {
+    await db.execute(
+      "INSERT INTO entries (user_id, category_id, amount, note, created_at) VALUES (?, ?, ?, ?, ?)",
+      [userId, session.categoryId, session.amount, session.note, `${session.targetDate} 12:00:00`]
+    );
+  } else {
+    await db.execute(
+      "INSERT INTO entries (user_id, category_id, amount, note) VALUES (?, ?, ?, ?)",
+      [userId, session.categoryId, session.amount, session.note]
+    );
+  }
 
   await deleteSession(`wizard:${userId}`);
-  await ctx.editMessageText("Entry saved successfully!");
+  const savedFor = session.targetDate ? ` for ${formatDateLabel(session.targetDate)}` : "";
+  await ctx.editMessageText(`Entry saved successfully${savedFor}!`);
   await ctx.answerCallbackQuery();
 });
 
