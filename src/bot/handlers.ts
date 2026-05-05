@@ -155,8 +155,10 @@ bot.callbackQuery(/^cat_(\d+)$/, async (ctx) => {
     ? `\n\nDate: ${formatDateLabel(prev.targetDate)}`
     : "";
   await ctx.editMessageText(
-    "Enter the amount in Taka:\n\n" +
-    "(Just send a number, e.g. 500)" +
+    "Enter amount and optional note:\n\n" +
+    "Examples:\n" +
+    "500\n" +
+    "350 lunch with team" +
     dateNote
   );
   await ctx.answerCallbackQuery();
@@ -601,52 +603,29 @@ bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
 
   if (session.step === "amount") {
-    const amount = Number(text);
+    const trimmed = text.trim();
+    const firstSpace = trimmed.search(/\s/);
+    const amountStr = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
+    const noteRaw = firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1).trim();
+    const amount = Number(amountStr);
     if (isNaN(amount) || amount <= 0) {
-      await ctx.reply("Please enter a valid positive number.");
+      await ctx.reply(
+        "Please send a positive amount, optionally followed by a note (e.g. `350 lunch`)."
+      );
       return;
     }
     await setSession(`wizard:${userId}`, {
-      step: "note",
-      categoryId: session.categoryId,
-      amount,
-      ...(session.targetDate ? { targetDate: session.targetDate } : {}),
-    });
-
-    const keyboard = new InlineKeyboard().text("Skip", "skip_note");
-    await ctx.reply("Add a note (optional):", { reply_markup: keyboard });
-  } else if (session.step === "note") {
-    await setSession(`wizard:${userId}`, {
       step: "confirm",
       categoryId: session.categoryId,
-      amount: session.amount,
-      note: text,
+      amount,
+      note: noteRaw || null,
       ...(session.targetDate ? { targetDate: session.targetDate } : {}),
     });
-    await showConfirmation(ctx, userId);
+    await showConfirmation(ctx, userId, true);
   }
 });
 
-bot.callbackQuery("skip_note", async (ctx) => {
-  const userId = ctx.from.id;
-  const session = await getSession(`wizard:${userId}`);
-  if (!session || session.step !== "note") {
-    await ctx.answerCallbackQuery();
-    return;
-  }
-
-  await setSession(`wizard:${userId}`, {
-    step: "confirm",
-    categoryId: session.categoryId,
-    amount: session.amount,
-    note: null,
-    ...(session.targetDate ? { targetDate: session.targetDate } : {}),
-  });
-  await showConfirmation(ctx, userId);
-  await ctx.answerCallbackQuery();
-});
-
-async function showConfirmation(ctx: any, userId: number) {
+async function showConfirmation(ctx: any, userId: number, forceNewMessage = false) {
   const session = await getSession(`wizard:${userId}`);
   const catResult = await db.execute(
     "SELECT name FROM categories WHERE id = ?",
@@ -663,14 +642,18 @@ async function showConfirmation(ctx: any, userId: number) {
     .text("Confirm", "confirm_entry")
     .text("Cancel", "cancel_entry");
 
-  await ctx.editMessageText(
+  const body =
     `Please confirm:\n\n` +
     `Category: ${categoryName}\n` +
     `Amount: ${session.amount} Taka` +
     noteText +
-    dateText,
-    { reply_markup: keyboard }
-  );
+    dateText;
+
+  if (forceNewMessage) {
+    await ctx.reply(body, { reply_markup: keyboard });
+  } else {
+    await ctx.editMessageText(body, { reply_markup: keyboard });
+  }
 }
 
 bot.callbackQuery("confirm_entry", async (ctx) => {
