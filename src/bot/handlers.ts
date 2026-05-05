@@ -12,6 +12,11 @@ import {
 } from "../db/client";
 import { generateSummary, generateDailySummaryForDate, formatSummary } from "../lib/summary";
 import { parseUserDate, todayIso, daysAgoIso, formatDateLabel } from "../lib/date";
+import {
+  getBudgetStatus,
+  setBudget,
+  checkAndAlertOverBudget,
+} from "../lib/budget";
 
 // Middleware: check if user is allowed
 bot.use(async (ctx, next) => {
@@ -54,6 +59,8 @@ bot.command("start", async (ctx) => {
     .text("Add Multiple", "bulk_start")
     .row()
     .text("Edit / Backfill", "edit_start")
+    .text("Budget", "budget_view")
+    .row()
     .text("Open Dashboard", "open_dashboard")
     .row()
     .text("Today", "summary_daily")
@@ -172,25 +179,25 @@ bot.callbackQuery("open_dashboard", async (ctx) => {
 
 bot.callbackQuery("summary_daily", async (ctx) => {
   const summary = await generateSummary("daily", "ondemand");
-  await ctx.editMessageText(formatSummary(summary));
+  await ctx.editMessageText(await formatSummary(summary));
   await ctx.answerCallbackQuery();
 });
 
 bot.callbackQuery("summary_weekly", async (ctx) => {
   const summary = await generateSummary("weekly", "ondemand");
-  await ctx.editMessageText(formatSummary(summary));
+  await ctx.editMessageText(await formatSummary(summary));
   await ctx.answerCallbackQuery();
 });
 
 bot.callbackQuery("summary_monthly", async (ctx) => {
   const summary = await generateSummary("monthly", "ondemand");
-  await ctx.editMessageText(formatSummary(summary));
+  await ctx.editMessageText(await formatSummary(summary));
   await ctx.answerCallbackQuery();
 });
 
 bot.callbackQuery("summary_yesterday", async (ctx) => {
   const summary = await generateDailySummaryForDate(daysAgoIso(1));
-  await ctx.editMessageText(formatSummary(summary));
+  await ctx.editMessageText(await formatSummary(summary));
   await ctx.answerCallbackQuery();
 });
 
@@ -200,6 +207,132 @@ bot.callbackQuery("summary_pick_day", async (ctx) => {
   await ctx.editMessageText(
     "Send the day as YYYY-MM-DD (e.g. 2026-05-04), MM-DD (05-04 — current year), or 'today' / 'yesterday'."
   );
+  await ctx.answerCallbackQuery();
+});
+
+// Budget flow
+bot.callbackQuery("budget_view", async (ctx) => {
+  const status = await getBudgetStatus();
+  const keyboard = new InlineKeyboard().text("Set new budget", "budget_set_start");
+
+  if (!status) {
+    await ctx.editMessageText(
+      "No active budget.\n\nTap below to set one — your spending will be tracked against it.",
+      { reply_markup: keyboard }
+    );
+  } else {
+    const overLine =
+      status.remaining >= 0
+        ? `🪙 Remaining: ${status.remaining.toFixed(2)}`
+        : `⚠️ Over by: ${Math.abs(status.remaining).toFixed(2)}`;
+    await ctx.editMessageText(
+      `💼 Budget: ${status.budget.amount.toFixed(2)} (since ${status.budget.start_date})\n` +
+      `💸 Spent: ${status.spent.toFixed(2)}\n` +
+      overLine,
+      { reply_markup: keyboard }
+    );
+  }
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("budget_set_start", async (ctx) => {
+  const userId = ctx.from.id;
+  await setSession(`budget:${userId}`, { step: "awaiting_amount" });
+  await ctx.editMessageText(
+    "Enter the budget amount in Taka (e.g. 50000):"
+  );
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("budget_date_today", async (ctx) => {
+  await proposeBudgetConfirm(ctx, ctx.from.id, todayIso());
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("budget_date_yesterday", async (ctx) => {
+  await proposeBudgetConfirm(ctx, ctx.from.id, daysAgoIso(1));
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("budget_date_pick", async (ctx) => {
+  const userId = ctx.from.id;
+  const session = (await getSession(`budget:${userId}`)) || {};
+  await setSession(`budget:${userId}`, { ...session, step: "awaiting_date" });
+  await ctx.editMessageText(
+    "Send the start date as YYYY-MM-DD (e.g. 2026-05-05), MM-DD (05-05 — current year), or 'today' / 'yesterday'."
+  );
+  await ctx.answerCallbackQuery();
+});
+
+async function proposeBudgetConfirm(
+  ctx: any,
+  userId: number,
+  startDate: string,
+  forceNewMessage = false
+) {
+  const session = (await getSession(`budget:${userId}`)) || {};
+  if (typeof session.amount !== "number") {
+    const send = forceNewMessage ? ctx.reply.bind(ctx) : ctx.editMessageText.bind(ctx);
+    await send("Budget setup expired. Tap Budget to start again.");
+    await deleteSession(`budget:${userId}`);
+    return;
+  }
+  await setSession(`budget:${userId}`, {
+    step: "confirm",
+    amount: session.amount,
+    startDate,
+  });
+
+  const keyboard = new InlineKeyboard()
+    .text("Confirm", "budget_confirm")
+    .text("Cancel", "budget_cancel");
+
+  const status = await getBudgetStatus();
+  const replaceNote = status
+    ? `\n\nThis will close the current budget (${status.budget.amount.toFixed(2)} since ${status.budget.start_date}). ` +
+      `Any remaining balance will be saved as Savings on ${startDate}.`
+    : "";
+
+  const body =
+    `Confirm new budget:\n\n` +
+    `Amount: ${session.amount.toFixed(2)} Taka\n` +
+    `Starting: ${formatDateLabel(startDate)}` +
+    replaceNote;
+
+  if (forceNewMessage) {
+    await ctx.reply(body, { reply_markup: keyboard });
+  } else {
+    await ctx.editMessageText(body, { reply_markup: keyboard });
+  }
+}
+
+bot.callbackQuery("budget_confirm", async (ctx) => {
+  const userId = ctx.from.id;
+  const session = await getSession(`budget:${userId}`);
+  if (!session || session.step !== "confirm") {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+
+  const { closedRemainder } = await setBudget(
+    session.amount,
+    session.startDate,
+    userId
+  );
+  await deleteSession(`budget:${userId}`);
+
+  let msg = `Budget set: ${session.amount.toFixed(2)} Taka starting ${formatDateLabel(session.startDate)}.`;
+  if (closedRemainder > 0) {
+    msg += `\n\n🪙 Auto-saved ${closedRemainder.toFixed(2)} from previous budget to Savings.`;
+  }
+  await ctx.editMessageText(msg);
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("budget_cancel", async (ctx) => {
+  const userId = ctx.from.id;
+  await deleteSession(`budget:${userId}`);
+  await ctx.editMessageText("Budget setup cancelled.");
   await ctx.answerCallbackQuery();
 });
 
@@ -381,6 +514,38 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
+  // Budget setup
+  const budgetSession = await getSession(`budget:${userId}`);
+  if (budgetSession?.step === "awaiting_amount") {
+    const amount = Number(ctx.message.text);
+    if (isNaN(amount) || amount <= 0) {
+      await ctx.reply("Please enter a valid positive number.");
+      return;
+    }
+    await setSession(`budget:${userId}`, { step: "awaiting_date_choice", amount });
+    const keyboard = new InlineKeyboard()
+      .text("Today", "budget_date_today")
+      .text("Yesterday", "budget_date_yesterday")
+      .row()
+      .text("Pick date", "budget_date_pick");
+    await ctx.reply(
+      `Amount: ${amount.toFixed(2)} Taka.\n\nWhen does this budget start?`,
+      { reply_markup: keyboard }
+    );
+    return;
+  }
+  if (budgetSession?.step === "awaiting_date") {
+    const iso = parseUserDate(ctx.message.text);
+    if (!iso) {
+      await ctx.reply(
+        "Couldn't parse that date. Try YYYY-MM-DD (2026-05-04), MM-DD (05-05), or 'today' / 'yesterday'."
+      );
+      return;
+    }
+    await proposeBudgetConfirm(ctx, userId, iso, true);
+    return;
+  }
+
   // Pick-a-day summary
   const summarySession = await getSession(`summary:${userId}`);
   if (summarySession?.step === "awaiting_date") {
@@ -393,7 +558,7 @@ bot.on("message:text", async (ctx) => {
     }
     await deleteSession(`summary:${userId}`);
     const summary = await generateDailySummaryForDate(iso);
-    await ctx.reply(formatSummary(summary));
+    await ctx.reply(await formatSummary(summary));
     return;
   }
 
@@ -426,6 +591,7 @@ bot.on("message:text", async (ctx) => {
     if (targetDate) {
       await showDayEntries(ctx, userId, targetDate, true);
     }
+    await checkAndAlertOverBudget(bot);
     return;
   }
 
@@ -531,6 +697,7 @@ bot.callbackQuery("confirm_entry", async (ctx) => {
   const savedFor = session.targetDate ? ` for ${formatDateLabel(session.targetDate)}` : "";
   await ctx.editMessageText(`Entry saved successfully${savedFor}!`);
   await ctx.answerCallbackQuery();
+  await checkAndAlertOverBudget(bot);
 });
 
 bot.callbackQuery("cancel_entry", async (ctx) => {
@@ -636,6 +803,7 @@ bot.callbackQuery("bulk_confirm", async (ctx) => {
   await deleteSession(`bulk:${userId}`);
   await ctx.editMessageText(`${session.entries.length} entries saved successfully!`);
   await ctx.answerCallbackQuery();
+  await checkAndAlertOverBudget(bot);
 });
 
 bot.callbackQuery("bulk_cancel", async (ctx) => {

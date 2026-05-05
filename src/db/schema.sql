@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS allowed_users (
   added_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Budgets (one active at a time; end_date IS NULL = active)
+CREATE TABLE IF NOT EXISTS budgets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  amount REAL NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE,
+  alert_sent INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_budgets_active ON budgets(end_date);
+
 -- Indexes for fast filtering
 CREATE INDEX IF NOT EXISTS idx_entries_user_id ON entries(user_id);
 CREATE INDEX IF NOT EXISTS idx_entries_category_id ON entries(category_id);

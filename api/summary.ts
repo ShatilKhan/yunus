@@ -62,7 +62,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     return res.status(200).json({
       success: true,
       data: {
-        text: formatSummary(summary),
+        text: await formatSummary(summary),
         summary,
       },
     });

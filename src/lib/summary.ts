@@ -1,4 +1,5 @@
 import { db } from "../db/client";
+import { getBudgetStatus } from "./budget";
 
 export type SummaryPeriod = "daily" | "weekly" | "monthly";
 export type SummaryMode = "scheduled" | "ondemand";
@@ -172,7 +173,7 @@ export async function generateDailySummaryForDate(
   };
 }
 
-export function formatSummary(summary: SummaryResult): string {
+export async function formatSummary(summary: SummaryResult): Promise<string> {
   const lines: string[] = [];
   lines.push(`📊 ${summary.periodLabel} Summary`);
   lines.push("━━━━━━━━━━━━━━");
@@ -190,6 +191,20 @@ export function formatSummary(summary: SummaryResult): string {
   lines.push(`💸 Total Expense: ${summary.totalExpense.toFixed(2)}`);
   lines.push(`💰 Total Savings: ${summary.totalSaving.toFixed(2)}`);
   lines.push(`📈 Net: ${summary.net >= 0 ? "+" : ""}${summary.net.toFixed(2)}`);
+
+  const status = await getBudgetStatus();
+  if (status) {
+    lines.push("━━━━━━━━━━━━━━");
+    lines.push(
+      `💼 Budget: ${status.budget.amount.toFixed(2)} (since ${status.budget.start_date})`
+    );
+    lines.push(`💸 Spent: ${status.spent.toFixed(2)}`);
+    if (status.remaining >= 0) {
+      lines.push(`🪙 Remaining: ${status.remaining.toFixed(2)}`);
+    } else {
+      lines.push(`⚠️ Over by: ${Math.abs(status.remaining).toFixed(2)}`);
+    }
+  }
 
   return lines.join("\n");
 }
