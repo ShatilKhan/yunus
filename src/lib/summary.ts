@@ -125,6 +125,53 @@ export async function generateSummary(
   };
 }
 
+export async function generateDailySummaryForDate(
+  iso: string
+): Promise<SummaryResult> {
+  const query = `
+    SELECT
+      c.name as category,
+      c.type,
+      SUM(e.amount) as amount
+    FROM entries e
+    JOIN categories c ON e.category_id = c.id
+    WHERE e.created_at >= datetime(?, 'start of day')
+    AND e.created_at < datetime(?, 'start of day', '+1 day')
+    GROUP BY c.id
+    ORDER BY c.type DESC, amount DESC
+  `;
+
+  const result = await db.execute(query, [iso, iso]);
+  const rows = result.rows as Array<{ category: string; type: string; amount: number }>;
+
+  const totalExpense = rows
+    .filter((r) => r.type === "expense")
+    .reduce((sum, r) => sum + Number(r.amount), 0);
+
+  const totalSaving = rows
+    .filter((r) => r.type === "saving")
+    .reduce((sum, r) => sum + Number(r.amount), 0);
+
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y!, (m ?? 1) - 1, d ?? 1);
+  const periodLabel = dt.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
+  return {
+    period: "daily",
+    periodLabel,
+    entries: rows,
+    totalExpense,
+    totalSaving,
+    net: totalSaving - totalExpense,
+    count: rows.length,
+  };
+}
+
 export function formatSummary(summary: SummaryResult): string {
   const lines: string[] = [];
   lines.push(`📊 ${summary.periodLabel} Summary`);
