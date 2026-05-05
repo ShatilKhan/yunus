@@ -10,7 +10,7 @@ import {
   listAllowedUsers,
   getAdminId,
 } from "../db/client";
-import { generateSummary, formatSummary } from "../lib/summary";
+import { generateSummary, generateDailySummaryForDate, formatSummary } from "../lib/summary";
 import { parseUserDate, todayIso, daysAgoIso, formatDateLabel } from "../lib/date";
 
 // Middleware: check if user is allowed
@@ -57,6 +57,9 @@ bot.command("start", async (ctx) => {
     .text("Open Dashboard", "open_dashboard")
     .row()
     .text("Today", "summary_daily")
+    .text("Yesterday", "summary_yesterday")
+    .text("Pick day", "summary_pick_day")
+    .row()
     .text("This Week", "summary_weekly")
     .text("This Month", "summary_monthly");
 
@@ -182,6 +185,21 @@ bot.callbackQuery("summary_weekly", async (ctx) => {
 bot.callbackQuery("summary_monthly", async (ctx) => {
   const summary = await generateSummary("monthly", "ondemand");
   await ctx.editMessageText(formatSummary(summary));
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("summary_yesterday", async (ctx) => {
+  const summary = await generateDailySummaryForDate(daysAgoIso(1));
+  await ctx.editMessageText(formatSummary(summary));
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("summary_pick_day", async (ctx) => {
+  const userId = ctx.from.id;
+  await setSession(`summary:${userId}`, { step: "awaiting_date" });
+  await ctx.editMessageText(
+    "Send the day as YYYY-MM-DD (e.g. 2026-05-04), MM-DD (05-04 — current year), or 'today' / 'yesterday'."
+  );
   await ctx.answerCallbackQuery();
 });
 
@@ -360,6 +378,22 @@ bot.on("message:text", async (ctx) => {
   const bulkSession = await getSession(`bulk:${userId}`);
   if (bulkSession && bulkSession.step === "awaiting_input") {
     await parseBulkEntries(ctx, userId, ctx.message.text);
+    return;
+  }
+
+  // Pick-a-day summary
+  const summarySession = await getSession(`summary:${userId}`);
+  if (summarySession?.step === "awaiting_date") {
+    const iso = parseUserDate(ctx.message.text);
+    if (!iso) {
+      await ctx.reply(
+        "Couldn't parse that date. Try YYYY-MM-DD (2026-05-04), MM-DD (05-04), or 'today' / 'yesterday'."
+      );
+      return;
+    }
+    await deleteSession(`summary:${userId}`);
+    const summary = await generateDailySummaryForDate(iso);
+    await ctx.reply(formatSummary(summary));
     return;
   }
 
