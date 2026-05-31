@@ -31,7 +31,19 @@ export function DataTable({ data }: DataTableProps) {
   }
 
   const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
+    // SQLite returns "YYYY-MM-DD HH:MM:SS" — parse manually for browser compatibility
+    const parts = dateStr.split(/[\sT]/);
+    const dateParts = parts[0]!.split("-").map(Number);
+    const timeParts = (parts[1] || "00:00:00").split(":").map(Number);
+    const date = new Date(
+      dateParts[0]!,
+      (dateParts[1] || 1) - 1,
+      dateParts[2] || 1,
+      timeParts[0] || 0,
+      timeParts[1] || 0,
+      timeParts[2] || 0
+    );
+    if (isNaN(date.getTime())) return dateStr;
     return date.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
@@ -66,7 +78,7 @@ export function DataTable({ data }: DataTableProps) {
                 </Badge>
               </TableCell>
               <TableCell className="tabular-nums">
-                {Number(entry.amount).toFixed(2)}
+                {Number(entry.amount ?? 0).toFixed(2)}
               </TableCell>
               <TableCell className="text-muted-foreground max-w-[200px] truncate">
                 {entry.note || "—"}
