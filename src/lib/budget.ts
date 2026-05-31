@@ -24,7 +24,23 @@ export async function getActiveBudget(): Promise<ActiveBudget | null> {
       over_budget_date: row.over_budget_date ? String(row.over_budget_date) : null,
     };
   } catch {
-    return null;
+    // Column over_budget_date may not exist yet — retry without it
+    try {
+      const result = await db.execute(
+        "SELECT id, amount, start_date, alert_sent FROM budgets WHERE end_date IS NULL ORDER BY start_date DESC LIMIT 1"
+      );
+      if (result.rows.length === 0) return null;
+      const row = result.rows[0] as any;
+      return {
+        id: Number(row.id),
+        amount: Number(row.amount),
+        start_date: String(row.start_date),
+        alert_sent: Number(row.alert_sent),
+        over_budget_date: null,
+      };
+    } catch {
+      return null;
+    }
   }
 }
 
