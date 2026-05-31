@@ -6,12 +6,13 @@ export interface ActiveBudget {
   amount: number;
   start_date: string;
   alert_sent: number;
+  over_budget_date: string | null;
 }
 
 export async function getActiveBudget(): Promise<ActiveBudget | null> {
   try {
     const result = await db.execute(
-      "SELECT id, amount, start_date, alert_sent FROM budgets WHERE end_date IS NULL ORDER BY start_date DESC LIMIT 1"
+      "SELECT id, amount, start_date, alert_sent, over_budget_date FROM budgets WHERE end_date IS NULL ORDER BY start_date DESC LIMIT 1"
     );
     if (result.rows.length === 0) return null;
     const row = result.rows[0] as any;
@@ -20,6 +21,7 @@ export async function getActiveBudget(): Promise<ActiveBudget | null> {
       amount: Number(row.amount),
       start_date: String(row.start_date),
       alert_sent: Number(row.alert_sent),
+      over_budget_date: row.over_budget_date ? String(row.over_budget_date) : null,
     };
   } catch {
     return null;
@@ -109,6 +111,16 @@ function isoDayBefore(iso: string): string {
   return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
 }
 
+export async function updateBudgetAmount(
+  budgetId: number,
+  newAmount: number
+): Promise<void> {
+  await db.execute(
+    "UPDATE budgets SET amount = ?, alert_sent = 0, over_budget_date = NULL WHERE id = ? AND end_date IS NULL",
+    [newAmount, budgetId]
+  );
+}
+
 export async function checkAndAlertOverBudget(bot: Bot): Promise<void> {
   const active = await getActiveBudget();
   if (!active) return;
@@ -119,7 +131,7 @@ export async function checkAndAlertOverBudget(bot: Bot): Promise<void> {
 
   // Mark alerted BEFORE sending so concurrent writes don't double-fire.
   const update = await db.execute(
-    "UPDATE budgets SET alert_sent = 1 WHERE id = ? AND alert_sent = 0",
+    "UPDATE budgets SET alert_sent = 1, over_budget_date = date('now') WHERE id = ? AND alert_sent = 0",
     [active.id]
   );
   // If no rows changed, another invocation already sent the alert.

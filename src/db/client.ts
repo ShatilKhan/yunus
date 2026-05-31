@@ -13,6 +13,13 @@ export const db = connect({ url, authToken });
 export async function initSchema() {
   const schema = await Bun.file("src/db/schema.sql").text();
   await db.exec(schema);
+
+  // Safe migrations (additive only)
+  try {
+    await db.execute("ALTER TABLE budgets ADD COLUMN over_budget_date DATE");
+  } catch {
+    // Column already exists
+  }
 }
 
 // Helper to get admin ID from settings

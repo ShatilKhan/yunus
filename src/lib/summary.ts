@@ -202,7 +202,10 @@ export async function formatSummary(summary: SummaryResult): Promise<string> {
     if (status.remaining >= 0) {
       lines.push(`🪙 Remaining: ${status.remaining.toFixed(2)}`);
     } else {
-      lines.push(`⚠️ Over by: ${Math.abs(status.remaining).toFixed(2)}`);
+      const overDate = status.budget.over_budget_date
+        ? ` (since ${status.budget.over_budget_date})`
+        : "";
+      lines.push(`⚠️ Over by: ${Math.abs(status.remaining).toFixed(2)}${overDate}`);
     }
   }
 

@@ -16,6 +16,7 @@ import {
   getBudgetStatus,
   setBudget,
   checkAndAlertOverBudget,
+  updateBudgetAmount,
 } from "../lib/budget";
 
 // Middleware: check if user is allowed
@@ -155,8 +156,10 @@ bot.callbackQuery(/^cat_(\d+)$/, async (ctx) => {
     ? `\n\nDate: ${formatDateLabel(prev.targetDate)}`
     : "";
   await ctx.editMessageText(
-    "Enter the amount in Taka:\n\n" +
-    "(Just send a number, e.g. 500)" +
+    "Enter amount and optional note:\n\n" +
+    "Examples:\n" +
+    "500\n" +
+    "350 lunch with team" +
     dateNote
   );
   await ctx.answerCallbackQuery();
@@ -213,7 +216,8 @@ bot.callbackQuery("summary_pick_day", async (ctx) => {
 // Budget flow
 bot.callbackQuery("budget_view", async (ctx) => {
   const status = await getBudgetStatus();
-  const keyboard = new InlineKeyboard().text("Set new budget", "budget_set_start");
+  const keyboard = new InlineKeyboard()
+    .text("Set new budget", "budget_set_start");
 
   if (!status) {
     await ctx.editMessageText(
@@ -225,13 +229,40 @@ bot.callbackQuery("budget_view", async (ctx) => {
       status.remaining >= 0
         ? `🪙 Remaining: ${status.remaining.toFixed(2)}`
         : `⚠️ Over by: ${Math.abs(status.remaining).toFixed(2)}`;
+    const overDateLine = status.budget.over_budget_date
+      ? `\n📅 Over since: ${status.budget.over_budget_date}`
+      : "";
+
+    keyboard.text("Edit Budget", "budget_edit");
+
     await ctx.editMessageText(
       `💼 Budget: ${status.budget.amount.toFixed(2)} (since ${status.budget.start_date})\n` +
       `💸 Spent: ${status.spent.toFixed(2)}\n` +
-      overLine,
+      overLine +
+      overDateLine,
       { reply_markup: keyboard }
     );
   }
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery("budget_edit", async (ctx) => {
+  const userId = ctx.from.id;
+  const status = await getBudgetStatus();
+  if (!status) {
+    await ctx.editMessageText("No active budget to edit.");
+    await ctx.answerCallbackQuery();
+    return;
+  }
+
+  await setSession(`budget:${userId}`, {
+    step: "awaiting_edit_amount",
+    currentAmount: status.budget.amount,
+  });
+  await ctx.editMessageText(
+    `Current budget: ${status.budget.amount.toFixed(2)} Taka\n\n` +
+    `Send the new budget amount as a positive number.`
+  );
   await ctx.answerCallbackQuery();
 });
 
@@ -408,6 +439,7 @@ async function showDayEntries(
       .row();
   }
   keyboard.text("+ Add for this date", "edit_add").row();
+  keyboard.text("Bulk add for this date", "edit_bulk_add").row();
   keyboard.text("Back", "edit_start");
 
   const header =
@@ -415,7 +447,7 @@ async function showDayEntries(
       ? `No entries for ${formatDateLabel(targetDate)}.`
       : `Entries for ${formatDateLabel(targetDate)}:`;
 
-  const body = `${header}\n\nTap an entry to edit its amount, or add a new one.`;
+  const body = `${header}\n\nTap an entry to edit its amount, or add entries.`;
   if (forceNewMessage) {
     await ctx.reply(body, { reply_markup: keyboard });
   } else {
@@ -479,10 +511,42 @@ bot.callbackQuery("edit_add", async (ctx) => {
   await ctx.answerCallbackQuery();
 });
 
+bot.callbackQuery("edit_bulk_add", async (ctx) => {
+  const userId = ctx.from.id;
+  const editSession = await getSession(`edit:${userId}`);
+  if (!editSession?.targetDate) {
+    await ctx.answerCallbackQuery({ text: "Pick a date first." });
+    return;
+  }
+
+  const categories = await db.execute("SELECT name FROM categories ORDER BY id");
+  const categoryList = (categories.rows as Array<{ name: string }>)
+    .map((c) => c.name)
+    .join(", ");
+
+  await setSession(`bulk:${userId}`, {
+    step: "awaiting_input",
+    targetDate: editSession.targetDate,
+  });
+
+  await ctx.editMessageText(
+    `Adding multiple entries for ${formatDateLabel(editSession.targetDate)}.\n\n` +
+    `Send one line per entry in this format:\n` +
+    `Category Amount [Note]\n\n` +
+    `Examples:\n` +
+    `Bazar 500 Weekly market\n` +
+    `Grocery 1200\n` +
+    `Savings 2000 Monthly savings\n\n` +
+    `Categories: ${categoryList}\n\n` +
+    `Tip: You can skip any category by leaving it out or using 0.`
+  );
+  await ctx.answerCallbackQuery();
+});
+
 // Bulk entry callback
 bot.callbackQuery("bulk_start", async (ctx) => {
   const userId = ctx.from.id;
-  await setSession(`bulk:${userId}`, { step: "awaiting_input" });
+  await setSession(`bulk:${userId}`, { step: "awaiting_input", targetDate: null });
 
   const categories = await db.execute("SELECT name FROM categories ORDER BY id");
   const categoryList = (categories.rows as Array<{ name: string }>)
@@ -516,6 +580,26 @@ bot.on("message:text", async (ctx) => {
 
   // Budget setup
   const budgetSession = await getSession(`budget:${userId}`);
+  if (budgetSession?.step === "awaiting_edit_amount") {
+    const amount = Number(ctx.message.text);
+    if (isNaN(amount) || amount <= 0) {
+      await ctx.reply("Please enter a valid positive number.");
+      return;
+    }
+    const status = await getBudgetStatus();
+    if (!status) {
+      await ctx.reply("No active budget to edit.");
+      await deleteSession(`budget:${userId}`);
+      return;
+    }
+    const oldAmount = budgetSession.currentAmount;
+    await updateBudgetAmount(status.budget.id, amount);
+    await deleteSession(`budget:${userId}`);
+    await ctx.reply(
+      `Budget updated from ${oldAmount.toFixed(2)} to ${amount.toFixed(2)} Taka.`
+    );
+    return;
+  }
   if (budgetSession?.step === "awaiting_amount") {
     const amount = Number(ctx.message.text);
     if (isNaN(amount) || amount <= 0) {
@@ -601,52 +685,29 @@ bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
 
   if (session.step === "amount") {
-    const amount = Number(text);
+    const trimmed = text.trim();
+    const firstSpace = trimmed.search(/\s/);
+    const amountStr = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
+    const noteRaw = firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1).trim();
+    const amount = Number(amountStr);
     if (isNaN(amount) || amount <= 0) {
-      await ctx.reply("Please enter a valid positive number.");
+      await ctx.reply(
+        "Please send a positive amount, optionally followed by a note (e.g. `350 lunch`)."
+      );
       return;
     }
     await setSession(`wizard:${userId}`, {
-      step: "note",
-      categoryId: session.categoryId,
-      amount,
-      ...(session.targetDate ? { targetDate: session.targetDate } : {}),
-    });
-
-    const keyboard = new InlineKeyboard().text("Skip", "skip_note");
-    await ctx.reply("Add a note (optional):", { reply_markup: keyboard });
-  } else if (session.step === "note") {
-    await setSession(`wizard:${userId}`, {
       step: "confirm",
       categoryId: session.categoryId,
-      amount: session.amount,
-      note: text,
+      amount,
+      note: noteRaw || null,
       ...(session.targetDate ? { targetDate: session.targetDate } : {}),
     });
-    await showConfirmation(ctx, userId);
+    await showConfirmation(ctx, userId, true);
   }
 });
 
-bot.callbackQuery("skip_note", async (ctx) => {
-  const userId = ctx.from.id;
-  const session = await getSession(`wizard:${userId}`);
-  if (!session || session.step !== "note") {
-    await ctx.answerCallbackQuery();
-    return;
-  }
-
-  await setSession(`wizard:${userId}`, {
-    step: "confirm",
-    categoryId: session.categoryId,
-    amount: session.amount,
-    note: null,
-    ...(session.targetDate ? { targetDate: session.targetDate } : {}),
-  });
-  await showConfirmation(ctx, userId);
-  await ctx.answerCallbackQuery();
-});
-
-async function showConfirmation(ctx: any, userId: number) {
+async function showConfirmation(ctx: any, userId: number, forceNewMessage = false) {
   const session = await getSession(`wizard:${userId}`);
   const catResult = await db.execute(
     "SELECT name FROM categories WHERE id = ?",
@@ -663,14 +724,18 @@ async function showConfirmation(ctx: any, userId: number) {
     .text("Confirm", "confirm_entry")
     .text("Cancel", "cancel_entry");
 
-  await ctx.editMessageText(
+  const body =
     `Please confirm:\n\n` +
     `Category: ${categoryName}\n` +
     `Amount: ${session.amount} Taka` +
     noteText +
-    dateText,
-    { reply_markup: keyboard }
-  );
+    dateText;
+
+  if (forceNewMessage) {
+    await ctx.reply(body, { reply_markup: keyboard });
+  } else {
+    await ctx.editMessageText(body, { reply_markup: keyboard });
+  }
 }
 
 bot.callbackQuery("confirm_entry", async (ctx) => {
@@ -764,8 +829,10 @@ async function parseBulkEntries(ctx: any, userId: number, text: string) {
     return;
   }
 
-  // Store entries in session for confirmation
-  await setSession(`bulk:${userId}`, { step: "confirm", entries });
+  // Store entries in session for confirmation (preserve targetDate for backfill)
+  const currentSession = await getSession(`bulk:${userId}`);
+  const targetDate = currentSession?.targetDate || null;
+  await setSession(`bulk:${userId}`, { step: "confirm", entries, targetDate });
 
   // Build summary
   const total = entries.reduce((sum, e) => sum + e.amount, 0);
@@ -794,14 +861,22 @@ bot.callbackQuery("bulk_confirm", async (ctx) => {
   }
 
   for (const entry of session.entries) {
-    await db.execute(
-      "INSERT INTO entries (user_id, category_id, amount, note) VALUES (?, ?, ?, ?)",
-      [userId, entry.categoryId, entry.amount, entry.note]
-    );
+    if (session.targetDate) {
+      await db.execute(
+        "INSERT INTO entries (user_id, category_id, amount, note, created_at) VALUES (?, ?, ?, ?, ?)",
+        [userId, entry.categoryId, entry.amount, entry.note, `${session.targetDate} 12:00:00`]
+      );
+    } else {
+      await db.execute(
+        "INSERT INTO entries (user_id, category_id, amount, note) VALUES (?, ?, ?, ?)",
+        [userId, entry.categoryId, entry.amount, entry.note]
+      );
+    }
   }
 
   await deleteSession(`bulk:${userId}`);
-  await ctx.editMessageText(`${session.entries.length} entries saved successfully!`);
+  const savedFor = session.targetDate ? ` for ${formatDateLabel(session.targetDate)}` : "";
+  await ctx.editMessageText(`${session.entries.length} entries saved successfully${savedFor}!`);
   await ctx.answerCallbackQuery();
   await checkAndAlertOverBudget(bot);
 });
